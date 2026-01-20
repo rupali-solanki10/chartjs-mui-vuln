@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Component Architecture & Data Flow</title>
+<style>
+  body { font-family: Arial, sans-serif; line-height: 1.4; color: #111; }
+  h1 { font-size: 20pt; }
+  h2 { font-size: 14pt; margin-top: 16px; }
+  h3 { font-size: 12pt; margin-top: 12px; }
+  p { font-size: 10pt; }
+  pre { background:#f6f6f6; padding:8px; border:1px solid #ddd; overflow:auto; }
+  ul { margin-left: 1.2em; }
+</style>
+</head>
+<body>
+<h1>Component Architecture & Data Flow</h1>
+
+<h2>High-level summary</h2>
+<p>This is a React + TypeScript single-page app (Vite) that visualizes a large vulnerabilities JSON as charts and a table. The dataset is loaded at runtime (not bundled) and parsed off the main thread using a Web Worker. A central React context (<code>DataContext</code>) exposes the dataset and filtering helper(s). Charts and the table consume filtered results. Table selection + comparison are owned by <code>VulnTable</code> and reported to <code>Dashboard</code>.</p>
+
+<h2>Key files and responsibilities</h2>
+<ul>
+  <li><strong><code>src/types.ts</code></strong>
+    <p>Domain types: <code>Vulnerability</code>, <code>Image</code>, <code>Metadata</code>, <code>FilterState</code>, etc. Single source of truth for shapes.</p>
+  </li>
+  <li><strong><code>src/workers/dataWorker.ts</code></strong>
+    <p>Loads <code>/data.json</code> (runtime fetch) and posts parsed result back. Worker fallback logic present in <code>DataContext</code> for environments where worker can't be used.</p>
+  </li>
+  <li><strong><code>src/context/DataContext.tsx</code></strong>
+    <p>Loads raw data (worker or fetch), computes <code>firstImage</code> and flattens vulns. Builds precomputed indices: <code>bySeverity</code>, <code>byOwner</code>, <code>byKaiStatus</code>, and <code>ports</code> to accelerate filters. Exposes <code>getFilteredVulns(filters: FilterState)</code>, <code>getVulnByCve(cve)</code>, <code>loading</code>, <code>error</code>.</p>
+  </li>
+  <li><strong><code>src/utils/dataUtils.ts</code></strong>
+    <p>Helper transformations: <code>flattenVulns</code>, <code>aggregateSeverityCounts</code>, <code>topPackagesByVulnCount</code>, <code>timeSeriesByMonth</code>, <code>cvssBuckets</code>, <code>getFixableVulns</code>, <code>countRiskFactors</code>, <code>systemVsUserBySeverity</code>, <code>filterVulns</code>.</p>
+  </li>
+  <li><strong><code>src/pages/Dashboard.tsx</code></strong>
+    <p>Orchestrates layout: <code>FilterControls</code>, charts, <code>VulnTable</code>, <code>ComparisonDrawer</code>. Receives selection callbacks from the table.</p>
+  </li>
+  <li><strong><code>src/components/VulnTable.tsx</code></strong>
+    <p>Renders table, sorting, selection. Owns selection state (<code>selectedCves</code>) and exposes <code>onSelectionChange</code> and <code>onRequestCompare</code>. Implements CSV export (escaped + UTF-8 BOM). Toolbar layout tweaks applied.</p>
+  </li>
+  <li><strong>Chart components</strong>
+    <p>Examples: <code>SeverityChart.tsx</code> (Pie), <code>TimeSeriesChart.tsx</code>, <code>TopPackagesChart.tsx</code>, <code>RiskFactorsChart.tsx</code>, <code>CvssScatter.tsx</code>. They consume filtered vulns and use Chart.js option typing (<code>ChartOptions&lt;T&gt;</code>).</p>
+  </li>
+</ul>
+
+<h2>Data flow (sequence)</h2>
+<ol>
+  <li>Browser loads the app (index page).</li>
+  <li><code>DataContext</code> initializes and tries to spin up <code>dataWorker</code> (Web Worker).
+    <ul>
+      <li>Worker fetches <code>/data.json</code> and posts parsed JSON back.</li>
+      <li>If worker unavailable, <code>DataContext</code> falls back to main-thread fetch/parse.</li>
+    </ul>
+  </li>
+  <li>On receiving raw data, <code>DataContext</code> finds <code>firstImage</code>, flattens vulnerabilities, and builds indices (<code>bySeverity</code>, <code>byOwner</code>, <code>byKaiStatus</code>, <code>ports</code>).</li>
+  <li>Components call <code>getFilteredVulns(filters)</code>. Context does index intersections first and applies text/date/port tests only to candidates.</li>
+  <li>Charts receive <code>filteredVulns</code> and compute datasets via <code>dataUtils</code>.</li>
+  <li><code>VulnTable</code> receives <code>filteredVulns</code> and handles selection/export/compare flows; selection emits events to <code>Dashboard</code>.</li>
+</ol>
+
+<h2>Contracts (APIs / Props / functions)</h2>
+<ul>
+  <li><strong>DataContext</strong>
+    <ul>
+      <li>Exposed: <code>loading: boolean</code>, <code>error: Error | null</code>, <code>firstImage: Image | null</code>, <code>getFilteredVulns(filters: FilterState): Vulnerability[]</code>, <code>getVulnByCve(cve: string)</code>.</li>
+    </ul>
+  </li>
+  <li><strong>VulnTable props</strong>
+    <ul>
+      <li><code>vulns: Vulnerability[]</code></li>
+      <li><code>onSelectionChange?: (selectedCves: string[]) =&gt; void</code></li>
+      <li><code>onRequestCompare?: (selectedCves: string[]) =&gt; void</code></li>
+    </ul>
+  </li>
+</ul>
+
+<h2>Implementation details & design decisions</h2>
+<ul>
+  <li>Worker-based parsing prevents freezing the main thread. The worker fetches <code>/data.json</code> at runtime — the file must be served via the dev server or available at that path in production.</li>
+  <li>Index-driven filtering: building Sets for each dimension and intersecting them is faster than scanning the full array for every filter change.</li>
+  <li>Text and date filters are applied after candidate reduction to limit expensive checks.</li>
+  <li>Chart.ts typing issues handled by using <code>ChartOptions&lt;T&gt;</code> and <code>as const</code> for literal values.</li>
+  <li>CSV export includes UTF-8 BOM for Excel compatibility and escapes fields.</li>
+</ul>
+
+<h2>Edge cases & failure modes</h2>
+<ul>
+  <li>Missing <code>/data.json</code>: <code>DataContext</code> fallback exists but app shows error if missing.</li>
+  <li>Worker unavailable (CSP/older browsers): fallback to main thread might freeze UI for very large files.</li>
+  <li>Very large dataset memory pressure: the app holds the full array in memory; consider streaming, pagination, or server-side filtering for huge data.</li>
+  <li>Invalid date formats: the code skips invalid dates but tests should cover this.</li>
+</ul>
+
+<h2>Performance notes & bottlenecks</h2>
+<ul>
+  <li>Strengths: Worker parsing + index-driven filtering reduce UI freezes and filtering latency.</li>
+  <li>Improvements: compress <code>data.json</code> on server (gzip/Brotli), add debounce to text inputs, use table virtualization (react-window) for very large visible row counts.</li>
+</ul>
+
+<h2>Recommended tests (priority)</h2>
+<ol>
+  <li>Unit: <code>DataContext.getFilteredVulns</code> – validate date range, port, owner, severity, text filtering and combined filters.</li>
+  <li>Worker fallback: simulate no worker and ensure fallback fetch works.</li>
+  <li><code>VulnTable</code>: selection events, <code>onRequestCompare</code>, CSV export formatting & selected/visible rows.</li>
+  <li><code>dataUtils</code>: aggregation functions correctness (severity counts, top packages, time series).</li>
+</ol>
+
+<h2>Quality gates & verification checklist</h2>
+<ul>
+  <li>Build locally: <code>npm install</code> and <code>npm run dev</code>.</li>
+  <li>Run TypeScript checks: <code>tsc</code> and linter.</li>
+  <li>Run unit tests (add Vitest/Jest) for the items above.</li>
+  <li>Smoke test: verify data loads, filters update charts & table, table selection opens comparison drawer, CSV export valid.</li>
+</ul>
+
+<h2>Suggested incremental improvements</h2>
+<ul>
+  <li>Add Vitest + tests for filtering, selection and CSV export.</li>
+  <li>Add virtualization to <code>VulnTable</code> for large visible rows.</li>
+  <li>Add debounce (200–300ms) to text filters.</li>
+  <li>Consider server-side search or IndexedDB for massive datasets.</li>
+  <li>Expose an option to export selected rows vs shown rows.</li>
+</ul>
+
+<h2>Where to look</h2>
+<ul>
+  <li><code>src/context/DataContext.tsx</code> — load + filtering core</li>
+  <li><code>src/workers/dataWorker.ts</code> — worker</li>
+  <li><code>src/utils/dataUtils.ts</code> — transforms</li>
+  <li><code>src/components/VulnTable.tsx</code> — selection/export/compare</li>
+  <li>Chart components: <code>src/components/SeverityChart.tsx</code>, etc.</li>
+</ul>
+
+<h2>Developer checklist to run locally</h2>
+<ol>
+  <li>Ensure <code>public/data.json</code> is present and reachable at <code>/data.json</code>.</li>
+  <li>Install dependencies and run the dev server locally to validate worker and UI.</li>
+  <li>Run TS/lint and tests after adding them.</li>
+</ol>
+
+
+</body>
+</html>
