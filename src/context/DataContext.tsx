@@ -2,6 +2,11 @@ import { createContext, useContext, useMemo, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { Vulnerability, Image } from "../types";
 import { getFirstImage } from "../utils/dataUtils";
+import {
+  loadFromCache,
+  saveToCache,
+  isCacheValid,
+} from "../utils/storageManager";
 
 type DataContextType = {
   raw: unknown;
@@ -9,6 +14,8 @@ type DataContextType = {
   getVulnByCve: (cve: string) => Vulnerability | undefined;
   loading: boolean;
   error?: string | null;
+  loadingProgress?: number;
+  cacheSource?: "localStorage" | "indexedDB" | null;
   /**
    * Efficiently filter vulnerabilities using precomputed indices. Accepts the same
    * shape as FilterControls.FilterState (severity, owner, kaiStatus, text).
@@ -29,69 +36,158 @@ type DataContextType = {
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
+const FETCH_TIMEOUT = 30000; // 30 seconds
+
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [raw, setRaw] = useState<unknown | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
+  const [cacheSource, setCacheSource] = useState<
+    "localStorage" | "indexedDB" | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
+    let workerRef: Worker | null = null;
 
-    async function initWithWorker() {
-      // The worker will fetch and parse `/data.json` — ensure the file is served from public/data.json
-      try {
-        // Create a module worker
-        const worker = new Worker(
-          new URL("../workers/dataWorker.ts", import.meta.url),
-          { type: "module" }
+    async function loadData() {
+      // Step 1: Try to load from cache first (instant)
+      const cached = await loadFromCache();
+
+      if (cached.data && cached.timestamp) {
+        const isValid = isCacheValid(cached.timestamp);
+        console.log(
+          `📦 Cache ${isValid ? "hit" : "stale"} from ${cached.source}`,
         );
-        worker.onmessage = (ev: MessageEvent) => {
+
+        if (!cancelled) {
+          setRaw(cached.data);
+          setCacheSource(cached.source);
+          setLoading(false);
+          setLoadingProgress(100);
+        }
+
+        // If cache is fresh, we're done
+        if (isValid) {
+          console.log("✅ Using fresh cache, skipping network request");
+          return;
+        }
+
+        // Cache is stale, continue to fetch fresh data in background
+        console.log("🔄 Cache stale, fetching fresh data in background...");
+      } else {
+        console.log("🌐 No cache found, fetching from network...");
+      }
+
+      // Step 2: Fetch fresh data from network
+      if (cancelled) return;
+
+      if (!cached.data) {
+        setLoading(true);
+      }
+
+      try {
+        workerRef = new Worker(
+          new URL("../workers/dataWorker.ts", import.meta.url),
+          { type: "module" },
+        );
+
+        workerRef.onmessage = async (ev: MessageEvent) => {
           const payload = ev.data;
           if (cancelled) return;
+
+          // Handle progress updates
+          if (payload?.type === "progress") {
+            setLoadingProgress(payload.progress);
+            return;
+          }
+
           if (payload?.success) {
+            // Save to cache (LocalStorage or IndexedDB)
+            const saved = await saveToCache(payload.data);
+            if (saved) {
+              console.log("✅ Fresh data cached successfully");
+            }
+
             setRaw(payload.data);
             setLoading(false);
+            setLoadingProgress(100);
           } else {
-            setError(payload?.error || "unknown worker error");
+            setError(payload?.error || "Worker error");
             setLoading(false);
           }
-          worker.terminate();
+
+          if (workerRef) {
+            workerRef.terminate();
+            workerRef = null;
+          }
         };
-        worker.onerror = (err) => {
-          console.error("Worker error", err);
+
+        workerRef.onerror = (err) => {
+          console.error("Worker error:", err);
           if (!cancelled) {
             setError(String(err?.message || err));
             setLoading(false);
           }
-          worker.terminate();
+          if (workerRef) {
+            workerRef.terminate();
+            workerRef = null;
+          }
         };
 
-        // Ask worker to fetch the data. It will fetch the given url and post back.
-        worker.postMessage("/data.json");
-      } catch (err) {
-        // If worker creation fails (old browsers or bundler issues), fall back to main-thread fetch.
-        console.warn(
-          "Worker unavailable, falling back to main-thread fetch",
-          err
-        );
+        // Send fetch request with timeout to worker
+        workerRef.postMessage({
+          url: "https://media.githubusercontent.com/media/chanduusc/Ui-Demo-Data/main/ui_demo.json",
+          timeout: FETCH_TIMEOUT,
+        });
+      } catch (workerErr) {
+        // Fallback to main thread fetch
+        console.warn("Worker unavailable, using main thread", workerErr);
+
         try {
-          const res = await fetch("/data.json");
-          if (!res.ok)
-            throw new Error(`Failed to fetch /data.json: ${res.status}`);
+          setLoadingProgress(30);
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+          const res = await fetch(
+            "https://media.githubusercontent.com/media/chanduusc/Ui-Demo-Data/main/ui_demo.json",
+            { signal: controller.signal },
+          );
+
+          clearTimeout(timeoutId);
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          }
+
+          setLoadingProgress(70);
           const json = await res.json();
-          if (!cancelled) setRaw(json);
+
+          if (!cancelled) {
+            await saveToCache(json);
+            setRaw(json);
+            setLoadingProgress(100);
+          }
         } catch (e) {
-          if (!cancelled) setError(String(e));
+          if (!cancelled) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
         } finally {
           if (!cancelled) setLoading(false);
         }
       }
     }
 
-    initWithWorker();
+    loadData();
 
     return () => {
       cancelled = true;
+      if (workerRef) {
+        workerRef.terminate();
+        workerRef = null;
+      }
     };
   }, []);
 
@@ -124,7 +220,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     (firstImage?.exposedPorts || []).forEach(
       (p: { port?: string | number } = {}) => {
         if (p && p.port) ports.add(String(p.port));
-      }
+      },
     );
 
     return { list, bySeverity, byOwner, byKaiStatus, ports };
@@ -288,6 +384,8 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
         getVulnByCve,
         loading,
         error,
+        loadingProgress,
+        cacheSource,
         getFilteredVulns,
       }}
     >

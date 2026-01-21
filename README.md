@@ -11,6 +11,45 @@ Currently, two official plugins are available:
 
 The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
+
+## Run locally
+
+These steps assume you have a recent LTS of Node.js and npm installed. Recommended versions:
+
+- Node.js: 18.x or 20.x (LTS) — Node 18.16+ or Node 20.x is recommended.
+- npm: 9.x or newer
+
+Check your versions:
+
+```bash
+node -v
+npm -v
+```
+
+Install dependencies and run the dev server:
+
+```bash
+npm install
+npm run dev
+```
+
+Build for production:
+
+```bash
+npm run build
+```
+
+Run tests (Vitest):
+
+```bash
+npm test
+```
+
+Where to place the data file
+
+- The app expects the large JSON dataset at `/data.json` at runtime. Put your file at `public/data.json` so the dev server (or your production server) serves it at `/data.json`.
+- The DataContext attempts to parse `/data.json` in a Web Worker. If the worker is unavailable, it falls back to a main-thread fetch (which may block for large files).
+
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
@@ -71,44 +110,4 @@ export default defineConfig([
   },
 ])
 ```
-
-## Run locally
-
-These steps assume you have a recent LTS of Node.js and npm installed. Recommended versions:
-
-- Node.js: 18.x or 20.x (LTS) — Node 18.16+ or Node 20.x is recommended.
-- npm: 9.x or newer
-
-unzip data.son.zip file in public folder of the repository
-
-Check your versions:
-
-```bash
-node -v
-npm -v
-```
-
-Install dependencies and run the dev server:
-
-```bash
-npm install
-npm run dev
-```
-
-Build for production:
-
-```bash
-npm run build
-```
-
-Run tests (Vitest):
-
-```bash
-npm test
-```
-
-Where to place the data file
-
-- The app expects the large JSON dataset at `/data.json` at runtime. Put your file at `public/data.json` so the dev server (or your production server) serves it at `/data.json`.
-- The DataContext attempts to parse `/data.json` in a Web Worker. If the worker is unavailable, it falls back to a main-thread fetch (which may block for large files).
 

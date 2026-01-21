@@ -1,22 +1,85 @@
 /* eslint-disable no-restricted-globals */
-// Worker: fetch and parse a large JSON off the main thread.
-// Expects to receive a message with the URL to fetch (string).
+// Worker with streaming, progress tracking, and timeout support
 
 self.addEventListener("message", async (ev) => {
-    const url = ev.data;
+    const { url, timeout = 30000 } = ev.data;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
     try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+        const res = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+                "Accept-Encoding": "gzip, deflate, br",
+            },
+        });
 
-        // Parse JSON in the worker (off main thread)
-        const json = await res.json();
+        clearTimeout(timeoutId);
 
-        // Post result back to main thread. We send a small wrapper to indicate success.
-        // Note: Transferable objects could be used for ArrayBuffers, but not needed here.
-        // Keep the shape simple: { success: true, data }
-        (self as unknown as Worker).postMessage({ success: true, data: json });
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+
+        const contentLength = res.headers.get("content-length");
+
+        if (contentLength && res.body) {
+            // Stream with progress tracking
+            const total = parseInt(contentLength, 10);
+            let loaded = 0;
+            const reader = res.body.getReader();
+            const chunks: Uint8Array[] = [];
+            let lastProgress = 0;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                chunks.push(value);
+                loaded += value.length;
+
+                // Report progress (throttle to every 5%)
+                const progress = Math.min(Math.round((loaded / total) * 100), 99);
+                if (progress - lastProgress >= 5) {
+                    (self as unknown as Worker).postMessage({
+                        type: "progress",
+                        progress,
+                    });
+                    lastProgress = progress;
+                }
+            }
+
+            // Combine chunks
+            const combined = new Uint8Array(loaded);
+            let position = 0;
+            for (const chunk of chunks) {
+                combined.set(chunk, position);
+                position += chunk.length;
+            }
+
+            // Parse JSON
+            const text = new TextDecoder("utf-8").decode(combined);
+            const json = JSON.parse(text);
+
+            (self as unknown as Worker).postMessage({
+                success: true,
+                data: json,
+            });
+        } else {
+            // Fallback: no streaming
+            const json = await res.json();
+            (self as unknown as Worker).postMessage({
+                success: true,
+                data: json,
+            });
+        }
     } catch (err) {
-        (self as unknown as Worker).postMessage({ success: false, error: String(err) });
+        clearTimeout(timeoutId);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        (self as unknown as Worker).postMessage({
+            success: false,
+            error: errorMsg,
+        });
     }
 });
 
