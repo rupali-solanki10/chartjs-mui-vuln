@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
@@ -74,6 +74,16 @@ export default function VulnTable({
       setSortDir("asc");
     }
   };
+
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  // Virtualize rows for better performance with large datasets
+  const virtualizer = useVirtualizer({
+    count: sorted.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 53, // Approximate row height
+    overscan: 10, // Number of items to render outside visible area
+  });
 
   if (!vulnerabilities || vulnerabilities.length === 0)
     return (
@@ -240,43 +250,81 @@ export default function VulnTable({
             <TableCell>Fix</TableCell>
           </TableRow>
         </TableHead>
-        <TableBody>
-          {sorted.map((v, idx) => (
-            <TableRow key={`${v.cve}-${v.packageName}-${idx}`} hover>
-              <TableCell padding="checkbox">
-                <Checkbox
-                  checked={selectedCves.includes(v.cve)}
-                  onChange={() => {
-                    const next = selectedCves.includes(v.cve)
-                      ? selectedCves.filter((p) => p !== v.cve)
-                      : [...selectedCves, v.cve];
-                    setSelectedCves(next);
-                    if (onSelectionChange) onSelectionChange(next);
-                  }}
-                  inputProps={{ "aria-label": `select ${v.cve}` }}
-                />
-              </TableCell>
-              <TableCell>
-                <Link
-                  component={RouterLink}
-                  to={`/vuln/${encodeURIComponent(v.cve)}`}
-                  underline="hover"
-                >
-                  {v.cve}
-                </Link>
-              </TableCell>
-              <TableCell>{v.severity}</TableCell>
-              <TableCell>{v.cvss ?? "-"}</TableCell>
-              <TableCell>
-                {v.packageName} {v.packageVersion}
-              </TableCell>
-              <TableCell>{v.owner}</TableCell>
-              <TableCell>{v.published}</TableCell>
-              <TableCell>{v.fixDate || v.status || "-"}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
       </Table>
+
+      {/* Virtualized table body */}
+      <Box
+        ref={parentRef}
+        sx={{
+          height: 600,
+          overflow: "auto",
+          position: "relative",
+        }}
+      >
+        <Box
+          sx={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const v = sorted[virtualRow.index];
+            return (
+              <Box
+                key={virtualRow.key}
+                sx={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                  display: "flex",
+                  alignItems: "center",
+                  borderBottom: "1px solid rgba(224, 224, 224, 1)",
+                  "&:hover": {
+                    backgroundColor: "rgba(0, 0, 0, 0.04)",
+                  },
+                }}
+              >
+                <Box sx={{ width: "64px", textAlign: "center" }}>
+                  <Checkbox
+                    checked={selectedCves.includes(v.cve)}
+                    onChange={() => {
+                      const next = selectedCves.includes(v.cve)
+                        ? selectedCves.filter((p) => p !== v.cve)
+                        : [...selectedCves, v.cve];
+                      setSelectedCves(next);
+                      if (onSelectionChange) onSelectionChange(next);
+                    }}
+                    inputProps={{ "aria-label": `select ${v.cve}` }}
+                  />
+                </Box>
+                <Box sx={{ flex: "1 1 15%", px: 2 }}>
+                  <Link
+                    component={RouterLink}
+                    to={`/vuln/${encodeURIComponent(v.cve)}`}
+                    underline="hover"
+                  >
+                    {v.cve}
+                  </Link>
+                </Box>
+                <Box sx={{ flex: "1 1 10%", px: 2 }}>{v.severity}</Box>
+                <Box sx={{ flex: "1 1 8%", px: 2 }}>{v.cvss ?? "-"}</Box>
+                <Box sx={{ flex: "1 1 20%", px: 2 }}>
+                  {v.packageName} {v.packageVersion}
+                </Box>
+                <Box sx={{ flex: "1 1 12%", px: 2 }}>{v.owner}</Box>
+                <Box sx={{ flex: "1 1 12%", px: 2 }}>{v.published}</Box>
+                <Box sx={{ flex: "1 1 12%", px: 2 }}>
+                  {v.fixDate || v.status || "-"}
+                </Box>
+              </Box>
+            );
+          })}
+        </Box>
+      </Box>
     </TableContainer>
   );
 }
