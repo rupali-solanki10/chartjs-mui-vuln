@@ -1,5 +1,3 @@
-// ...existing code...
-import React from "react";
 import Box from "@mui/material/Box";
 import TextField from "@mui/material/TextField";
 import MenuItem from "@mui/material/MenuItem";
@@ -121,8 +119,8 @@ export default function FilterControls({
           value.lastDays
             ? String(value.lastDays)
             : value.startDate
-            ? "custom"
-            : ""
+              ? "custom"
+              : ""
         }
         onChange={(e) => {
           const v = e.target.value;

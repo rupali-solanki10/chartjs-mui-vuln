@@ -1,4 +1,3 @@
-import React from "react";
 import { useParams, Link as RouterLink } from "react-router-dom";
 import Container from "@mui/material/Container";
 import Card from "@mui/material/Card";

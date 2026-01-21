@@ -1,5 +1,5 @@
 // ...existing code...
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import AppBar from "@mui/material/AppBar";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
@@ -18,8 +18,8 @@ import {
   flattenVulns,
   groupByOwnerAndSeverity,
   aggregateSeverityCounts,
-  type Vulnerability,
 } from "../utils/dataUtils";
+import type { Vulnerability } from "../types";
 import FilterSummary from "../components/FilterSummary";
 import Grow from "@mui/material/Grow";
 import Button from "@mui/material/Button";
@@ -41,7 +41,7 @@ export default function Dashboard() {
 
   const ports = useMemo(() => {
     const ps = (firstImage?.exposedPorts || []).map(
-      (p: { port?: string | number } = {}) => String(p.port ?? "")
+      (p: { port?: string | number } = {}) => String(p.port ?? ""),
     );
     return Array.from(new Set(ps)).filter((x) => x !== "");
   }, [firstImage]);
@@ -59,7 +59,7 @@ export default function Dashboard() {
         startDate: filters.startDate,
         endDate: filters.endDate,
       }),
-    [getFilteredVulns, filters]
+    [getFilteredVulns, filters],
   );
 
   const severityFromFiltered = useMemo(() => {
@@ -131,7 +131,7 @@ export default function Dashboard() {
                 Ports:{" "}
                 {(firstImage.exposedPorts || [])
                   .map((p: { port?: string | number } = {}) =>
-                    String(p.port ?? "")
+                    String(p.port ?? ""),
                   )
                   .filter((s) => s !== "")
                   .join(", ")}
